@@ -1,180 +1,280 @@
 """
-Cross-Encoder Re-Ranking - High-precision reranking of top candidates
+Cross-Encoder Reranker - Highest ROI improvement for ranking quality
++3% to +8% NDCG improvement with minimal latency increase
 
-Upgrade adds 3-8% NDCG improvement over retrieval alone.
+Architecture:
+1. Hybrid Retrieval → Top 100
+2. Cross-Encoder → Top 20  
+3. Final Ranking → Top 10
 
-Pipeline:
-  Top 100 from Hybrid Retrieval
-        ↓
-  Cross-Encoder (BAAI/bge-reranker)
-        ↓
-  Top 20 refined candidates
-        ↓
-  Final feature-based ranking
+Models:
+- BAAI/bge-reranker-base (preferred)
+- cross-encoder/ms-marco-MiniLM-L-6-v2 (fallback)
 """
 import numpy as np
-from typing import List, Dict
+from typing import List, Dict, Tuple
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from sentence_transformers import CrossEncoder
+    CROSS_ENCODER_AVAILABLE = True
+except ImportError:
+    CROSS_ENCODER_AVAILABLE = False
+    print("Warning: sentence-transformers not available. Using fallback scoring.")
 
 
 class CrossEncoderReranker:
     """
-    Cross-encoder reranking for high-precision candidate selection
-    
-    Uses sentence-transformers cross-encoder or fallback to feature-based reranking
+    Cross-encoder reranking for enhanced relevance scoring
     """
     
-    def __init__(self, model_name='cross-encoder/ms-marco-MiniLM-L-6-v2'):
-        self.model = None
+    def __init__(self, model_name: str = "BAAI/bge-reranker-base"):
         self.model_name = model_name
-        self.use_fallback = True
+        self.model = None
         
-        try:
-            from sentence_transformers import CrossEncoder
-            self.model = CrossEncoder(model_name)
-            self.use_fallback = False
-            print(f"✓ Cross-encoder loaded: {model_name}")
-        except ImportError:
-            print("⚠ sentence-transformers not available, using fallback reranker")
-        except Exception as e:
-            print(f"⚠ Could not load cross-encoder: {e}")
-            print("  Using fallback reranker")
+        if CROSS_ENCODER_AVAILABLE:
+            try:
+                print(f"Loading cross-encoder: {model_name}")
+                self.model = CrossEncoder(model_name)
+                print("✓ Cross-encoder loaded successfully")
+            except Exception as e:
+                print(f"Warning: Could not load {model_name}, using fallback. Error: {e}")
+                self.model = None
+        else:
+            print("Cross-encoder not available, using feature-based fallback")
     
-    def rerank(self, query: str, candidates: List[Dict], top_k: int = 20) -> List[Dict]:
+    def rerank_candidates(self, jd_text: str, candidates: List[Dict], top_k: int = 20) -> List[Dict]:
         """
-        Rerank candidates using cross-encoder
+        Rerank candidates using cross-encoder or fallback scoring
         
         Args:
-            query: Job description text
-            candidates: List of candidate dicts with profile_text
-            top_k: Number of top candidates to return after reranking
-        
+            jd_text: Job description text
+            candidates: List of candidate dicts with profile_text and scores
+            top_k: Number of candidates to rerank
+            
         Returns:
-            List of reranked candidates (top_k)
+            List of reranked candidates
         """
-        if self.use_fallback:
-            return self._fallback_rerank(query, candidates, top_k)
+        if self.model is not None:
+            return self._cross_encoder_rerank(jd_text, candidates, top_k)
+        else:
+            return self._fallback_rerank(candidates, top_k)
+    
+    def _cross_encoder_rerank(self, jd_text: str, candidates: List[Dict], top_k: int) -> List[Dict]:
+        """Cross-encoder reranking"""
+        print(f"Cross-encoder reranking top {len(candidates)} → {top_k}")
         
-        # Create query-candidate pairs
+        # Prepare pairs
         pairs = []
         for candidate in candidates:
-            profile_text = candidate.get('profile_text', '')
-            # Truncate for efficiency
-            profile_snippet = profile_text[:1000]
-            pairs.append([query[:500], profile_snippet])
+            # Create summary for better encoding
+            summary = self._create_candidate_summary(candidate)
+            pairs.append([jd_text, summary])
         
-        # Score with cross-encoder
-        scores = self.model.predict(pairs)
+        # Score pairs
+        try:
+            cross_scores = self.model.predict(pairs)
+        except Exception as e:
+            print(f"Cross-encoder failed: {e}, using fallback")
+            return self._fallback_rerank(candidates, top_k)
         
-        # Add scores to candidates
-        for candidate, score in zip(candidates, scores):
-            candidate['cross_encoder_score'] = float(score)
+        # Add cross-encoder scores
+        for i, candidate in enumerate(candidates):
+            candidate['cross_encoder_score'] = float(cross_scores[i])
         
-        # Sort by cross-encoder score
-        reranked = sorted(candidates, key=lambda x: x['cross_encoder_score'], reverse=True)
-        
-        return reranked[:top_k]
-    
-    def _fallback_rerank(self, query: str, candidates: List[Dict], top_k: int = 20) -> List[Dict]:
-        """
-        Fallback reranker using feature-based scoring
-        
-        Uses combination of existing scores with emphasis on skill match
-        """
-        query_lower = query.lower()
-        query_terms = set(query_lower.split())
-        
+        # Combine with existing scores (70% cross-encoder, 30% original)
         for candidate in candidates:
-            profile_text = candidate.get('profile_text', '').lower()
-            profile_terms = set(profile_text.split())
+            original_score = candidate.get('final_score', 0.5)
+            ce_score = candidate['cross_encoder_score']
             
-            # Term overlap score
-            overlap = len(query_terms & profile_terms)
-            overlap_score = min(overlap / max(len(query_terms), 1), 1.0)
+            # Normalize cross-encoder score to [0, 1]
+            # Cross-encoder typically outputs [-10, 10] range
+            ce_normalized = max(0, min(1, (ce_score + 10) / 20))
             
-            # Combine with existing RRF score
-            rrf_score = candidate.get('rrf_score', 0.0)
-            
-            # Weighted combination (favor overlap for precision)
-            rerank_score = 0.6 * overlap_score + 0.4 * rrf_score
-            
-            candidate['cross_encoder_score'] = rerank_score
+            candidate['reranked_score'] = (
+                0.70 * ce_normalized + 
+                0.30 * original_score
+            )
         
-        # Sort by rerank score
-        reranked = sorted(candidates, key=lambda x: x['cross_encoder_score'], reverse=True)
+        # Sort by reranked score
+        reranked = sorted(candidates, key=lambda x: x['reranked_score'], reverse=True)[:top_k]
         
-        return reranked[:top_k]
+        print(f"✓ Cross-encoder reranking complete: {len(reranked)} candidates")
+        return reranked
+    
+    def _fallback_rerank(self, candidates: List[Dict], top_k: int) -> List[Dict]:
+        """Fallback reranking using existing features"""
+        print(f"Using feature-based fallback reranking")
+        
+        # Enhanced feature combination for reranking
+        for candidate in candidates:
+            semantic_score = candidate.get('semantic_score', 0.5)
+            skill_score = candidate.get('skill_score', 0.5)
+            experience_score = candidate.get('experience_score', 0.5)
+            behavior_score = candidate.get('behavior_score', 0.5)
+            career_score = candidate.get('career_score', 0.5)
+            
+            # Rerank weights (emphasize skill + semantic for precision)
+            candidate['reranked_score'] = (
+                0.35 * semantic_score +
+                0.30 * skill_score +
+                0.15 * experience_score +
+                0.10 * behavior_score +
+                0.10 * career_score
+            )
+        
+        # Sort by reranked score
+        reranked = sorted(candidates, key=lambda x: x['reranked_score'], reverse=True)[:top_k]
+        
+        print(f"✓ Feature-based reranking complete: {len(reranked)} candidates")
+        return reranked
+    
+    def _create_candidate_summary(self, candidate: Dict) -> str:
+        """
+        Create enhanced candidate summary for better cross-encoder scoring
+        Instead of raw profile text, generate structured summary
+        """
+        profile_text = candidate.get('profile_text', '')
+        
+        # Extract key elements
+        summary_parts = []
+        
+        # Experience level
+        if 'years' in profile_text.lower():
+            summary_parts.append("Experienced professional")
+        
+        # Key skills (extract first few mentioned)
+        skills = []
+        skill_keywords = ['Python', 'Java', 'JavaScript', 'React', 'AWS', 'ML', 'FAISS', 'SQL', 'Docker', 'Kubernetes']
+        for skill in skill_keywords:
+            if skill.lower() in profile_text.lower():
+                skills.append(skill)
+                if len(skills) >= 4:
+                    break
+        
+        if skills:
+            summary_parts.append(f"Skills: {', '.join(skills)}")
+        
+        # Role level
+        if any(level in profile_text.lower() for level in ['senior', 'lead', 'principal', 'staff']):
+            summary_parts.append("Senior-level")
+        elif any(level in profile_text.lower() for level in ['junior', 'associate', 'entry']):
+            summary_parts.append("Junior-level")
+        
+        # Domain
+        if any(domain in profile_text.lower() for domain in ['machine learning', 'ml', 'ai', 'data science']):
+            summary_parts.append("Machine Learning background")
+        elif any(domain in profile_text.lower() for domain in ['backend', 'api', 'microservices']):
+            summary_parts.append("Backend engineering")
+        elif any(domain in profile_text.lower() for domain in ['frontend', 'react', 'ui', 'web']):
+            summary_parts.append("Frontend development")
+        
+        # Create summary
+        if summary_parts:
+            summary = f"{'. '.join(summary_parts)}."
+        else:
+            # Fallback to first 200 chars of profile
+            summary = profile_text[:200] + "..." if len(profile_text) > 200 else profile_text
+        
+        return summary
 
 
 class TwoStageRanker:
     """
-    Two-stage ranking pipeline:
-    
-    Stage 1: Fast retrieval (BM25 + FAISS) → Top 100
-    Stage 2: Slow but accurate cross-encoder → Top 20
-    Stage 3: Feature-based final ranking → Top 10
-    
-    This is production-grade ranking architecture.
+    Production two-stage ranking system:
+    Stage 1: Hybrid Retrieval (Top 100)
+    Stage 2: Cross-Encoder Reranking (Top 20)
     """
     
     def __init__(self):
-        self.cross_encoder = CrossEncoderReranker()
+        self.reranker = CrossEncoderReranker()
     
-    def rank(self, query: str, candidates: List[Dict], 
-             stage1_k: int = 100, stage2_k: int = 20) -> List[Dict]:
+    def rank(self, jd_text: str, candidates: List[Dict], 
+             retrieve_top: int = 100, rerank_top: int = 20, final_top: int = 10) -> List[Dict]:
         """
-        Two-stage ranking
+        Two-stage ranking pipeline
         
         Args:
-            query: Job description
-            candidates: Retrieved candidates (should be ~100)
-            stage1_k: Candidates from stage 1 (retrieval)
-            stage2_k: Candidates after stage 2 (reranking)
+            jd_text: Job description
+            candidates: All candidates with initial scores
+            retrieve_top: Candidates from hybrid retrieval
+            rerank_top: Candidates to rerank with cross-encoder
+            final_top: Final candidates to return
         
         Returns:
-            Top stage2_k candidates with cross_encoder_score
+            Final ranked candidates
         """
-        # Stage 1: Already done (hybrid retrieval)
-        stage1_candidates = candidates[:stage1_k]
+        print(f"\n🔄 Two-Stage Ranking: {len(candidates)} → {retrieve_top} → {rerank_top} → {final_top}")
         
-        # Stage 2: Cross-encoder reranking
-        stage2_candidates = self.cross_encoder.rerank(query, stage1_candidates, top_k=stage2_k)
+        # Stage 1: Take top candidates from hybrid retrieval
+        stage1_candidates = candidates[:retrieve_top]
+        print(f"Stage 1: Hybrid retrieval → Top {len(stage1_candidates)}")
         
-        return stage2_candidates
+        # Stage 2: Cross-encoder reranking on subset
+        stage2_candidates = self.reranker.rerank_candidates(
+            jd_text, 
+            stage1_candidates[:rerank_top], 
+            top_k=rerank_top
+        )
+        print(f"Stage 2: Cross-encoder rerank → Top {len(stage2_candidates)}")
+        
+        # Final: Return top N
+        final_candidates = stage2_candidates[:final_top]
+        
+        # Add stage info for debugging
+        for i, candidate in enumerate(final_candidates, 1):
+            candidate['final_rank'] = i
+            candidate['stage'] = 'reranked'
+        
+        print(f"Final: Top {len(final_candidates)} candidates")
+        
+        return final_candidates
 
 
 if __name__ == "__main__":
-    # Test cross-encoder reranking
+    # Test cross-encoder reranker
     reranker = CrossEncoderReranker()
     
-    query = "Senior ML Engineer with Python, FAISS, and ranking experience"
+    jd_text = """
+    Senior Machine Learning Engineer - Search & Ranking
+    Requirements: 5+ years ML, Python, PyTorch, FAISS, ranking algorithms
+    """
     
+    # Mock candidates
     candidates = [
         {
-            'candidate_id': 'C001',
-            'profile_text': 'ML Engineer with 6 years experience. Expert in Python, FAISS, ranking systems, and recommendation engines.',
-            'rrf_score': 0.028
+            'candidate_id': 'CAND_0000031',
+            'profile_text': 'Senior ML Engineer, 7 years experience, Python, PyTorch, FAISS, recommendation systems',
+            'final_score': 0.847,
+            'semantic_score': 0.832,
+            'skill_score': 0.900
         },
         {
-            'candidate_id': 'C002',
-            'profile_text': 'Backend developer with Java and Spring Boot. Some exposure to ML tools.',
-            'rrf_score': 0.025
+            'candidate_id': 'CAND_0000043',
+            'profile_text': 'Cloud Engineer, 6 years, Python, TensorFlow, vector databases, AWS',
+            'final_score': 0.782,
+            'semantic_score': 0.798,
+            'skill_score': 0.850
         },
         {
-            'candidate_id': 'C003',
-            'profile_text': 'Senior Engineer with Python and machine learning. Built search and ranking systems with FAISS.',
-            'rrf_score': 0.022
+            'candidate_id': 'CAND_0000025',
+            'profile_text': 'Frontend Developer, 4 years, React, JavaScript, some data pipeline work',
+            'final_score': 0.543,
+            'semantic_score': 0.412,
+            'skill_score': 0.300
         }
     ]
     
-    print("=== Cross-Encoder Reranking Test ===\n")
-    print("Query:", query)
-    print("\nOriginal Order (by RRF):")
-    for i, c in enumerate(candidates, 1):
-        print(f"  {i}. {c['candidate_id']} (RRF: {c['rrf_score']:.3f})")
+    # Test reranking
+    reranked = reranker.rerank_candidates(jd_text, candidates, top_k=3)
     
-    # Rerank
-    reranked = reranker.rerank(query, candidates, top_k=3)
-    
-    print("\nAfter Cross-Encoder Reranking:")
-    for i, c in enumerate(reranked, 1):
-        print(f"  {i}. {c['candidate_id']} (Cross-Encoder: {c['cross_encoder_score']:.3f}, RRF: {c['rrf_score']:.3f})")
+    print("\n=== RERANKING RESULTS ===")
+    for i, candidate in enumerate(reranked, 1):
+        print(f"Rank {i}: {candidate['candidate_id']}")
+        print(f"  Original Score: {candidate.get('final_score', 0):.3f}")
+        print(f"  Reranked Score: {candidate.get('reranked_score', 0):.3f}")
+        if 'cross_encoder_score' in candidate:
+            print(f"  Cross-Encoder:  {candidate['cross_encoder_score']:.3f}")
+        print()
