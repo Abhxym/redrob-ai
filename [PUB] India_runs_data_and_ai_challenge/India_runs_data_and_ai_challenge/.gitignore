@@ -1,0 +1,16 @@
+# Dataset
+*.jsonl
+data/
+dataset/
+
+# Models
+*.pkl
+*.faiss
+*.index
+
+# Outputs
+outputs/
+
+# Python
+venv/
+__pycache__/
