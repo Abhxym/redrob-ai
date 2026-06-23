@@ -1,0 +1,19 @@
+Senior Machine Learning Engineer - Search & Ranking
+
+We're looking for an experienced ML engineer to build and scale our search ranking systems.
+
+Requirements:
+- 5+ years of experience in machine learning and software engineering
+- Strong proficiency in Python, PyTorch, and TensorFlow
+- Experience with search systems: FAISS, Elasticsearch, or similar vector databases
+- Hands-on experience with ranking algorithms and recommendation systems
+- Knowledge of NLP, embeddings, and information retrieval
+- Experience with MLOps tools and deployment pipelines
+- Strong software engineering fundamentals
+
+Nice to have:
+- Experience with LLMs and fine-tuning
+- Knowledge of distributed systems
+- Contributions to open-source ML projects
+
+This is a senior IC role working on high-impact ML systems at a fast-growing tech company.
