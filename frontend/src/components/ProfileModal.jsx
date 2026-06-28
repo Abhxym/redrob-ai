@@ -1,4 +1,4 @@
-import { X, User, MapPin, Clock, Briefcase, Code, CheckCircle2, XCircle, Star, Github } from 'lucide-react';
+import { X, User, MapPin, Clock, Briefcase, Code, CheckCircle2, XCircle, Star } from 'lucide-react';
 import {
   RadarChart, PolarGrid, PolarAngleAxis, Radar,
   ResponsiveContainer, Tooltip,
