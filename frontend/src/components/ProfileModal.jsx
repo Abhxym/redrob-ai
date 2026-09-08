@@ -76,7 +76,26 @@ function parseProfileText(text) {
   return result;
 }
 
-export default function ProfileModal({ candidate, result, onClose }) {
+export default function ProfileModal({ candidate, result, isLoading, onClose }) {
+  if (!candidate && !isLoading) return null;
+
+  // Show a loading overlay while fetching
+  if (isLoading && !candidate) {
+    return (
+      <div className="modal-backdrop fade-in" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div className="modal-panel modal-loading-panel fade-up">
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
+            <X size={20} />
+          </button>
+          <div className="modal-loading-body">
+            <div className="spinner" style={{ width: 32, height: 32, borderWidth: 3 }} />
+            <span>Loading profile…</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!candidate) return null;
 
   const parsed = parseProfileText(candidate.profile_text);

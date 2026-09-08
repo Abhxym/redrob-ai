@@ -95,10 +95,20 @@ class HybridRetriever:
             dtype=np.float32
         )
         
-        # Load BM25
+        # Load BM25 — use a custom Unpickler to handle the case where the index
+        # was pickled with SimpleBM25 bound to __main__ (i.e. bm25_search.py run
+        # as a script) rather than to retrieval.hybrid_retrieval.
         print("  Loading BM25 index...")
+        
+        class _BM25Unpickler(pickle.Unpickler):
+            """Remaps __main__.SimpleBM25 → local SimpleBM25."""
+            def find_class(self, module, name):
+                if name == 'SimpleBM25':
+                    return SimpleBM25
+                return super().find_class(module, name)
+        
         with open(bm25_index_path, 'rb') as f:
-            self.bm25 = pickle.load(f)
+            self.bm25 = _BM25Unpickler(f).load()
         with open(bm25_candidates_path, 'rb') as f:
             self.bm25_candidate_ids = pickle.load(f)
         

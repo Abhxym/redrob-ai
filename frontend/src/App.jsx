@@ -10,8 +10,11 @@ import './App.css';
 
 export default function App() {
   const [health, setHealth] = useState(null);
+  const [isOffline, setIsOffline] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [lastJdText, setLastJdText] = useState(null);
+  const [lastTopK, setLastTopK] = useState(null);
   const [response, setResponse] = useState(null);
 
   // Profile modal
@@ -19,31 +22,40 @@ export default function App() {
   const [modalResult, setModalResult] = useState(null);
   const [modalLoading, setModalLoading] = useState(false);
 
-  // Load health on mount
+  // Load health on mount, track online/offline
   useEffect(() => {
     getHealth()
-      .then(setHealth)
-      .catch(() => {}); // silently fail - API might not be running
+      .then(data => { setHealth(data); setIsOffline(false); })
+      .catch(() => setIsOffline(true));
   }, []);
 
   const handleSubmit = useCallback(async (jdText, topK) => {
     setIsLoading(true);
     setError(null);
     setResponse(null);
+    setLastJdText(jdText);
+    setLastTopK(topK);
     try {
       const data = await rankCandidates(jdText, topK);
       setResponse(data);
+      setIsOffline(false);
       // Scroll to results
       setTimeout(() => {
         document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 100);
     } catch (err) {
+      const isNetwork = !err?.response;
+      if (isNetwork) setIsOffline(true);
       const msg = err?.response?.data?.detail || err.message || 'Unknown error';
       setError(`Failed to rank candidates: ${msg}`);
     } finally {
       setIsLoading(false);
     }
   }, []);
+
+  const handleRetry = useCallback(() => {
+    if (lastJdText) handleSubmit(lastJdText, lastTopK);
+  }, [lastJdText, lastTopK, handleSubmit]);
 
   const handleViewProfile = useCallback(async (candidateId) => {
     setModalLoading(true);
@@ -74,7 +86,7 @@ export default function App() {
         <div className="bg-grid" />
       </div>
 
-      <Navbar health={health} />
+      <Navbar health={health} isOffline={isOffline} />
 
       <main className="app-main">
         <div className="container">
@@ -86,13 +98,26 @@ export default function App() {
             <div className="error-banner fade-in">
               <AlertCircle size={16} />
               <span>{error}</span>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => setError(null)}
-              >
-                Dismiss
-              </button>
+              <div className="error-actions">
+                {lastJdText && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={handleRetry}
+                    disabled={isLoading}
+                  >
+                    <RefreshCw size={13} />
+                    Retry
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setError(null)}
+                >
+                  Dismiss
+                </button>
+              </div>
             </div>
           )}
 
@@ -186,6 +211,7 @@ export default function App() {
         <ProfileModal
           candidate={modalCandidate}
           result={modalResult}
+          isLoading={modalLoading}
           onClose={handleCloseModal}
         />
       )}

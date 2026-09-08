@@ -1,7 +1,7 @@
 import { Cpu, Zap, DollarSign } from 'lucide-react';
 import './Navbar.css';
 
-export default function Navbar({ health }) {
+export default function Navbar({ health, isOffline }) {
   return (
     <header className="navbar">
       <div className="container">
@@ -27,7 +27,13 @@ export default function Navbar({ health }) {
 
           {/* Status pills */}
           <div className="nav-pills">
-            {health && (
+            {/* API connectivity indicator */}
+            {isOffline ? (
+              <div className="status-pill status-pill-offline">
+                <span className="status-dot status-dot-offline" />
+                <span>API Offline</span>
+              </div>
+            ) : health ? (
               <>
                 <div className="status-pill">
                   <span className="status-dot" />
@@ -46,6 +52,11 @@ export default function Navbar({ health }) {
                   <span>BM25 + FAISS</span>
                 </div>
               </>
+            ) : (
+              <div className="status-pill status-pill-connecting">
+                <span className="status-dot status-dot-connecting" />
+                <span>Connecting…</span>
+              </div>
             )}
           </div>
         </div>

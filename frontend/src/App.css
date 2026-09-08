@@ -80,6 +80,13 @@
 }
 
 .error-banner button { margin-left: auto; }
+.error-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
 
 /* ── Loading ────────────────────────────────────────────── */
 .loading-section {

@@ -23,6 +23,13 @@ function getRankClass(rank) {
   return 'rank-n';
 }
 
+function getMatchBadge(rank, score) {
+  if (rank <= 3) return { label: '⭐ Top Match', cls: 'badge-amber' };
+  if (score >= 0.7) return { label: 'Strong Match', cls: 'badge-emerald' };
+  if (score >= 0.5) return { label: 'Good Match', cls: 'badge-cyan' };
+  return { label: 'Potential Match', cls: 'badge-violet' };
+}
+
 function ScoreBar({ label, value, weight, animate }) {
   const color = getScoreColor(value);
   const pct = Math.round(value * 100);
@@ -78,7 +85,7 @@ export default function CandidateCard({ result, index, onViewProfile }) {
         <div className="ccard-identity">
           <div className="ccard-id">{candidate_id}</div>
           <div className="ccard-meta">
-            <span className="badge badge-cyan">Top Match</span>
+            {(() => { const { label, cls } = getMatchBadge(rank, final_score); return <span className={`badge ${cls}`}>{label}</span>; })()}
           </div>
         </div>
 

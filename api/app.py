@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional
 import json
+import time
 
 from main import main as run_pipeline, load_candidates
 
@@ -127,7 +128,9 @@ def rank_candidates(req: RankRequest):
     Returns top-k ranked candidates with scores and factual reasoning.
     """
     try:
+        t0 = time.perf_counter()
         raw_results = run_pipeline(req.jd_text, top_k=req.top_k)
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Pipeline error: {str(exc)}")
 
@@ -159,7 +162,7 @@ def rank_candidates(req: RankRequest):
         pipeline_info={
             "retrieval": "BM25 + FAISS (RRF fusion)",
             "scoring": "Semantic 40% | Skills 25% | Experience 15% | Behavior 10% | Career 10%",
-            "latency": "4-200ms",
+            "latency": f"{elapsed_ms}ms",
             "cost": "$0 (no LLM)",
         },
     )
