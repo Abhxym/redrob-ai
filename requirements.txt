@@ -3,6 +3,7 @@ numpy
 scikit-learn
 sentence-transformers
 faiss-cpu
-openai
+fastapi
+uvicorn
 pyyaml
 jupyter
