@@ -16,4 +16,7 @@ echo   Backend:  http://localhost:8000
 echo   Frontend: http://localhost:5173
 echo   API Docs: http://localhost:8000/docs
 echo.
+echo   Note: the API loads 100k candidates + models on start (~1-2 min).
+echo   The UI shows "Warming up" until it is ready.
+echo.
 pause
