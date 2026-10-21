@@ -89,7 +89,7 @@ def main(jd_text, top_k=10):
     # Step 2: Hybrid Retrieval
     print("Step 2: Hybrid Retrieval (BM25 + FAISS)...")
     retriever = HybridRetriever()
-    candidates_pool = retriever.search(jd_text, top_k=100)
+    candidates_pool = retriever.search(jd_text)['results']  # RRF-fused top 100
     print(f"  Retrieved: {len(candidates_pool)} candidates\n")
     
     # Step 3: Load full candidate data

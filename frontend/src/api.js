@@ -1,10 +1,11 @@
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:8000';
+// Empty base → same origin. In dev, Vite proxies /api to FastAPI on :8000.
+const API_BASE = import.meta.env.VITE_API_BASE ?? '';
 
 const api = axios.create({
   baseURL: API_BASE,
-  timeout: 60000, // pipeline can take up to 200ms, but allow more for startup
+  timeout: 120000, // first request warms up the embedding + cross-encoder models
 });
 
 /**
@@ -25,14 +26,6 @@ export async function rankCandidates(jdText, topK = 10) {
  */
 export async function getHealth() {
   const { data } = await api.get('/api/health');
-  return data;
-}
-
-/**
- * GET /api/candidates
- */
-export async function getCandidates() {
-  const { data } = await api.get('/api/candidates');
   return data;
 }
 
