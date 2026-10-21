@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Full-dataset indexes and caches (rebuilt by generate_submission.py / index_challenge_data.py)
+data/submission_cache/
+challenge_data/
+
+# Generated outputs
+outputs/*.csv
+outputs/*.xlsx
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Local tooling
+.claude/
