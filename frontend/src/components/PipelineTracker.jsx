@@ -1,67 +1,61 @@
 import { useEffect, useState } from 'react';
-import { Check } from 'lucide-react';
 
 const STEPS = [
-  { name: 'Parse JD', detail: 'Skills, seniority, JD type' },
-  { name: 'BM25', detail: 'Keyword recall, top 75' },
-  { name: 'FAISS', detail: 'Semantic recall, top 75' },
-  { name: 'RRF fusion', detail: '1 / (60 + rank) → top 100' },
-  { name: 'Multi-signal score', detail: 'Dynamic, JD-aware weights' },
-  { name: 'Cross-encoder', detail: 'Re-rank JD × profile pairs' },
-  { name: 'Explain', detail: 'Factual reasons' },
+  'Parse job description',
+  'BM25 keyword search',
+  'FAISS semantic search',
+  'Reciprocal rank fusion',
+  'Feature scoring',
+  'Cross-encoder rerank',
+  'Write reasons',
 ];
 
 // Rough share of a warm request spent before each step starts (retrieval dominates).
 const PACE_MS = [0, 300, 7000, 10500, 11000, 11500, 14200];
 
-// The API runs the pipeline in one request, so progress while loading is paced client-side;
-// it never shows the final step complete until the response arrives.
-export default function PipelineTracker({ loading, done, info }) {
-  const [step, setStep] = useState(0);
+// The API runs the whole pipeline in one request, so progress is paced client-side
+// and never marks the last step done before the response arrives.
+export function RunProgress() {
+  const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
-    if (!loading) return;
-    setStep(0);
     const t0 = Date.now();
-    const id = setInterval(() => {
-      const elapsed = Date.now() - t0;
-      const next = PACE_MS.findLastIndex(ms => elapsed >= ms);
-      setStep(Math.min(next, STEPS.length - 1));
-    }, 250);
+    const id = setInterval(() => setElapsed(Date.now() - t0), 200);
     return () => clearInterval(id);
-  }, [loading]);
+  }, []);
 
-  const active = done ? STEPS.length : step;
-  const t = info?.timings;
+  const step = Math.min(PACE_MS.findLastIndex(ms => elapsed >= ms), STEPS.length - 1);
 
   return (
-    <section className="pipeline card" aria-label="Ranking pipeline">
-      <div className="pipeline-head">
-        <span className="eyebrow">Pipeline</span>
-        {done && info?.latency && <span className="mono small muted">{info.latency} end-to-end</span>}
-        {loading && <span className="mono small muted">running…</span>}
+    <div className="progress" aria-live="polite">
+      <div className="progress-head">
+        <span>Ranking</span>
+        <span className="mono muted">{(elapsed / 1000).toFixed(1)} s</span>
       </div>
-      <ol className="pipeline-steps">
-        {STEPS.map((s, i) => {
-          const state = i < active ? 'done' : i === active && loading ? 'active' : 'idle';
-          let detail = s.detail;
-          if (done && t) {
-            if (s.name === 'FAISS') detail = `${(info.corpus_size ?? 0).toLocaleString()} profiles searched`;
-            if (s.name === 'RRF fusion') detail = `Retrieval ${(t.retrieval_ms / 1000).toFixed(1)}s total`;
-            if (s.name === 'Cross-encoder') detail = info.reranker ? `${(t.rerank_ms / 1000).toFixed(1)}s · 70/30 blend` : 'Skipped';
-            if (s.name === 'Multi-signal score' && info.jd_type) detail = `Weights for ${info.jd_type.replace('_', ' ')} JD`;
-          }
-          return (
-            <li key={s.name} className={`pstep pstep-${state}`}>
-              <span className="pstep-dot">{state === 'done' ? <Check size={12} strokeWidth={3} /> : i + 1}</span>
-              <span className="pstep-text">
-                <span className="pstep-name">{s.name}</span>
-                <span className="pstep-detail">{detail}</span>
-              </span>
-            </li>
-          );
-        })}
+      <ol className="steps">
+        {STEPS.map((s, i) => (
+          <li key={s} className={i < step ? 'is-done' : i === step ? 'is-active' : ''}>{s}</li>
+        ))}
       </ol>
-    </section>
+    </div>
+  );
+}
+
+export function RunDetails({ info }) {
+  const t = info.timings || {};
+  const rows = [
+    ['Candidates searched', (info.corpus_size ?? 0).toLocaleString()],
+    ['Retrieval (BM25 + FAISS → RRF)', `${((t.retrieval_ms ?? 0) / 1000).toFixed(1)} s`],
+    ['Cross-encoder rerank', info.reranker ? `${((t.rerank_ms ?? 0) / 1000).toFixed(1)} s` : 'skipped'],
+    ['Total', info.latency],
+    ['JD type', info.jd_type ? info.jd_type.replace('_', ' ').replace(/^./, c => c.toUpperCase()) : '—'],
+    ['Required experience', info.jd_experience != null ? `${info.jd_experience}+ yrs` : '—'],
+  ];
+  return (
+    <table className="kv-table">
+      <tbody>
+        {rows.map(([k, v]) => <tr key={k}><th>{k}</th><td className="mono">{v}</td></tr>)}
+      </tbody>
+    </table>
   );
 }

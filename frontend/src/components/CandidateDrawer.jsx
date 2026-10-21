@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react';
-import { X, MapPin, Briefcase, GraduationCap, Star, LoaderCircle, Check } from 'lucide-react';
-import { ScoreRing, SignalBars } from './ScoreBits.jsx';
-import { parseProfileText, jdMentions, initials } from '../lib/profile.js';
+import { X, Star } from 'lucide-react';
+import { SignalTable } from './ScoreBits.jsx';
+import { parseProfileText, jdMentions, pct } from '../lib/profile.js';
 
 export default function CandidateDrawer({ result, profile, loading, weights, jdText, starred, onStar, onClose }) {
   useEffect(() => {
@@ -16,87 +16,76 @@ export default function CandidateDrawer({ result, profile, loading, weights, jdT
   const isMatch = sk => pipelineMatches.has(sk.toLowerCase()) || jdMentions(jdText, sk);
   const matched = p.skills.filter(isMatch);
   const others = p.skills.filter(sk => !isMatch(sk));
-  const title = p.headline || result.headline || result.candidate_id;
 
   return (
-    <div className="drawer-wrap" role="dialog" aria-modal="true" aria-label={`Profile ${result.candidate_id}`}>
-      <div className="drawer-scrim" onClick={onClose} />
+    <div className="overlay" role="dialog" aria-modal="true" aria-label={`Candidate ${result.candidate_id}`}>
+      <div className="scrim" onClick={onClose} />
       <aside className="drawer">
-        <div className="drawer-top">
-          <span className="avatar avatar-lg" aria-hidden="true">{initials(title)}</span>
-          <div className="drawer-id">
-            <span className="eyebrow">Rank #{result.rank} · <span className="mono">{result.candidate_id}</span></span>
-            <h2>{title}</h2>
-            <div className="crow-meta">
-              {p.currentRole && <span><Briefcase size={12} /> {p.currentRole}</span>}
-              {p.location && <span><MapPin size={12} /> {p.location}</span>}
-              {p.experienceYears > 0 && <span>{p.experienceYears} yrs</span>}
+        <div className="drawer-head">
+          <div>
+            <div className="sub mono">Rank {result.rank} · {result.candidate_id}</div>
+            <h2>{result.current_title || p.headline}</h2>
+            <div className="sub">
+              {[p.currentRole, p.location, `${result.experience_years} yrs experience`].filter(Boolean).join(' · ')}
             </div>
           </div>
           <div className="drawer-tools">
-            <button type="button" className={`icon-btn ${starred ? 'is-on star-on' : ''}`} onClick={onStar} aria-label="Toggle shortlist">
-              <Star size={16} fill={starred ? 'currentColor' : 'none'} />
+            <button type="button" className={`star ${starred ? 'is-on' : ''}`} onClick={onStar} aria-label="Toggle star">
+              <Star size={15} fill={starred ? 'currentColor' : 'none'} />
             </button>
-            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
-              <X size={16} />
-            </button>
+            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close"><X size={15} /></button>
           </div>
         </div>
 
         <div className="drawer-body">
-          <section className="dsec dsec-score">
-            <ScoreRing value={result.final_score} size={84} />
-            <SignalBars scores={result.scores} weights={weights} />
+          <section className="dsec">
+            <div className="score-line">
+              <span className="score-big mono">{pct(result.final_score)}</span>
+              <span className="muted">final score, out of 100</span>
+            </div>
+            <SignalTable scores={result.scores} weights={weights} />
           </section>
 
           <section className="dsec">
             <h3>Why this rank</h3>
-            <ul className="reasons">
-              {result.reasoning.map((r, i) => (
-                <li key={i}><Check size={14} /> <span>{r}</span></li>
-              ))}
+            <ul className="plain-list">
+              {result.reasoning.map((r, i) => <li key={i}>{r}</li>)}
             </ul>
           </section>
 
-          {loading && (
-            <div className="muted center pad"><LoaderCircle className="spin" size={18} /> Loading profile…</div>
-          )}
+          {loading && <p className="muted">Loading profile…</p>}
 
           {!loading && profile && (
             <>
               {p.skills.length > 0 && (
                 <section className="dsec">
-                  <h3>Skills <span className="muted small">{matched.length} of {p.skills.length} match the JD</span></h3>
-                  <div className="tags">
-                    {matched.map(sk => <span key={sk} className="tag tag-match">{sk}</span>)}
-                    {others.map(sk => <span key={sk} className="tag">{sk}</span>)}
-                  </div>
+                  <h3>Skills <span className="muted normal">· {matched.length} of {p.skills.length} match the JD</span></h3>
+                  <p className="skills-text">
+                    {matched.map((sk, i) => <span key={sk}><mark>{sk}</mark>{i < matched.length - 1 || others.length ? ', ' : ''}</span>)}
+                    {others.join(', ')}
+                  </p>
                 </section>
               )}
 
               {p.assessments.length > 0 && (
                 <section className="dsec">
                   <h3>Skill assessments</h3>
-                  <div className="assess">
-                    {p.assessments.map(a => (
-                      <div key={a.skill} className="assess-row">
-                        <span>{a.skill}</span>
-                        <span className="sigbar-track"><span className="sigbar-fill" style={{ width: `${a.score}%` }} /></span>
-                        <span className="mono">{a.score}</span>
-                      </div>
-                    ))}
-                  </div>
+                  <table className="kv-table">
+                    <tbody>
+                      {p.assessments.map(a => <tr key={a.skill}><th>{a.skill}</th><td className="mono">{a.score}/100</td></tr>)}
+                    </tbody>
+                  </table>
                 </section>
               )}
 
               {Object.keys(p.signals).length > 0 && (
                 <section className="dsec">
                   <h3>Platform signals</h3>
-                  <dl className="kv">
-                    {Object.entries(p.signals).map(([k, v]) => (
-                      <div key={k}><dt>{k}</dt><dd>{v}</dd></div>
-                    ))}
-                  </dl>
+                  <table className="kv-table">
+                    <tbody>
+                      {Object.entries(p.signals).map(([k, v]) => <tr key={k}><th>{k}</th><td>{v}</td></tr>)}
+                    </tbody>
+                  </table>
                 </section>
               )}
 
@@ -109,29 +98,23 @@ export default function CandidateDrawer({ result, profile, loading, weights, jdT
 
               {p.history.length > 0 && (
                 <section className="dsec">
-                  <h3>Career history</h3>
-                  <ol className="timeline">
-                    {p.history.map((h, i) => (
-                      <li key={i}>
-                        <div className="tl-head">
-                          <strong>{h.title}</strong>
-                          {h.company && <span className="muted"> · {h.company}</span>}
-                          {h.current && <span className="tag tag-good">Current</span>}
-                          {h.months && <span className="muted small mono">{h.months} mo</span>}
-                        </div>
-                        {h.description && <p className="prose small">{h.description}</p>}
-                      </li>
-                    ))}
-                  </ol>
+                  <h3>Experience</h3>
+                  {p.history.map((h, i) => (
+                    <div key={i} className="job">
+                      <div className="job-head">
+                        <strong>{h.title}</strong>{h.company && <span> · {h.company}</span>}
+                        <span className="muted mono"> {h.current ? 'current' : ''}{h.current && h.months ? ', ' : ''}{h.months ? `${h.months} mo` : ''}</span>
+                      </div>
+                      {h.description && <p className="prose">{h.description}</p>}
+                    </div>
+                  ))}
                 </section>
               )}
 
               {p.education.length > 0 && (
                 <section className="dsec">
                   <h3>Education</h3>
-                  {p.education.map((e, i) => (
-                    <p key={i} className="edu"><GraduationCap size={14} /> {e}</p>
-                  ))}
+                  <ul className="plain-list">{p.education.map((e, i) => <li key={i}>{e}</li>)}</ul>
                 </section>
               )}
 

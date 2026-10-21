@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { Sparkles, LoaderCircle, RotateCcw } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { SAMPLE_JDS } from '../lib/profile.js';
 
 const MIN_CHARS = 20;
 
-export default function Composer({ onSubmit, loading, compact, notReady }) {
-  const [text, setText] = useState('');
-  const [topK, setTopK] = useState(10);
+export default function Composer({ onSubmit, loading, notReady, compact, initialText = '', initialTopK = 10 }) {
+  const [text, setText] = useState(initialText);
+  const [topK, setTopK] = useState(initialTopK);
   const ready = text.trim().length >= MIN_CHARS && !loading && !notReady;
 
   const submit = e => {
@@ -15,58 +15,45 @@ export default function Composer({ onSubmit, loading, compact, notReady }) {
   };
 
   return (
-    <form className={`composer card ${compact ? 'composer-compact' : ''}`} onSubmit={submit}>
-      <div className="composer-head">
-        <div>
-          <h2 className="composer-title">Job description</h2>
-          <p className="muted small">Paste a JD. The pipeline parses it, retrieves, fuses, scores and explains.</p>
-        </div>
-        <div className="samples" role="group" aria-label="Load a sample job description">
-          {SAMPLE_JDS.map(s => (
-            <button key={s.label} type="button" className="pill" onClick={() => setText(s.text)}>
-              {s.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
+    <form className={`composer ${compact ? 'composer-compact' : ''}`} onSubmit={submit}>
       <textarea
         className="composer-input"
         value={text}
         onChange={e => setText(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submit(e); }}
-        placeholder="e.g. Senior ML Engineer, 5+ years, Python, PyTorch, vector search, MLOps on AWS…"
-        rows={compact ? 4 : 9}
+        placeholder="Paste a job description…"
+        rows={compact ? 8 : 6}
         aria-label="Job description"
       />
-
-      <div className="composer-foot">
-        <div className="composer-meta">
-          <label className="topk">
-            <span className="muted small">Shortlist size</span>
-            <input
-              type="range"
-              min={5}
-              max={100}
-              step={5}
-              value={topK}
-              onChange={e => setTopK(Number(e.target.value))}
-            />
-            <span className="mono topk-val">{topK}</span>
-          </label>
-          <span className="muted small mono">{text.trim().length} chars</span>
-          {text && (
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setText('')}>
-              <RotateCcw size={13} /> Clear
-            </button>
-          )}
-        </div>
-        <button type="submit" className="btn btn-primary" disabled={!ready} title={notReady ? 'Models are still loading' : undefined}>
-          {loading || notReady ? <LoaderCircle size={16} className="spin" /> : <Sparkles size={16} />}
+      <div className="pill-pair">
+        <button type="submit" className="pill pill-dark" disabled={!ready}>
           {loading ? 'Ranking…' : notReady ? 'Loading models…' : 'Rank candidates'}
-          {!loading && !notReady && <kbd>Ctrl ↵</kbd>}
+          <ArrowRight size={16} />
         </button>
+        <span className="pill-bridge" aria-hidden="true" />
+        <label className="pill pill-light">
+          <select
+            value=""
+            onChange={e => { const s = SAMPLE_JDS[Number(e.target.value)]; if (s) setText(s.text); }}
+            aria-label="Load an example job description"
+          >
+            <option value="" disabled>Try an example</option>
+            {SAMPLE_JDS.map((s, i) => <option key={s.label} value={i}>{s.label}</option>)}
+          </select>
+          <span className="pill-dot" aria-hidden="true">▾</span>
+        </label>
       </div>
+      <label className="topk">
+        Top
+        <input
+          type="number"
+          min={1}
+          max={100}
+          value={topK}
+          onChange={e => setTopK(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
+        />
+        candidates · Ctrl + Enter
+      </label>
     </form>
   );
 }

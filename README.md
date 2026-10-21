@@ -1,261 +1,149 @@
-# RedRob AI Recruiter
+# REDROB AI
 
-Production-ready AI recruiting system that ranks candidates using hybrid retrieval, multi-signal scoring, and factual reasoning generation.
+**An explainable candidate-ranking system: from a job description to a ranked shortlist out of 100,000 profiles, with no LLM in the loop.**
 
-## Overview
+Recruiters get a ranked list all the time. What they rarely get is a reason. A model says someone is a
+91% match and nobody can tell you why, so the list is hard to trust and impossible to defend to a hiring
+manager. RedRob tries to rank candidates in a way you can explain, step by step.
 
-RedRob AI combines semantic search (FAISS), keyword matching (BM25), feature engineering, and behavioral signals to rank candidates for job descriptions. Zero LLM costs, sub-10ms query performance, 85% ranking accuracy.
+It takes a job description, finds likely matches with keyword search (BM25) and semantic search (FAISS),
+merges the two lists with Reciprocal Rank Fusion, scores the top 100 on five signals with weights tuned to
+the type of role, and re-orders them with a cross-encoder. Every score in the UI is broken down into the
+signals behind it, and every candidate comes with plain-language reasons.
 
-## Architecture
+![RedRob landing page](docs/img/home.png)
+
+## Design decisions
+
+1. **No LLM in the ranking pipeline.** Results are deterministic (the same JD always gives the same ranking),
+   cost $0 per query, run offline, and every number can be traced back to a formula. An LLM would have been
+   easier to bolt on and much harder to explain.
+2. **Two retrievers, not one.** BM25 catches exact skill names ("FAISS", "Kubernetes"); embeddings catch meaning
+   ("vector search" ≈ "Milvus"). RRF merges them without having to calibrate their very different score scales.
+3. **CPU only.** MiniLM embeddings, a flat FAISS index and a small cross-encoder, all run on a laptop.
+
+## Architecture (short version)
 
 ```
-Job Description
-      ↓
-[JD Parser] → Extract: skills, experience, domain, leadership
-      ↓
-[Hybrid Retrieval] → BM25 (Top 50) + FAISS (Top 50) → RRF Fusion
-      ↓
-[Feature Engineering] → 5 Scores: skill, experience, career, behavior, semantic
-      ↓
-[Ranking Engine] → Weighted formula → Top 100 candidates
-      ↓
-[Reasoning Generator] → Factual explanations
-      ↓
-Ranked Candidates + Scores + Reasoning
+                    ┌─> BM25 (top 75) ──┐
+ Job description ──>│                   ├─> RRF fusion ──> top 100 ──> 5 feature signals ──> cross-encoder ──> ranked list
+   (JD parser)      └─> FAISS (top 75) ─┘   1/(60+rank)              (JD-aware weights)     (70/30 blend)   + reasons
+                                                                                                                │
+                                                                         FastAPI  /api/rank ──> React UI  <─────┘
 ```
 
-## Features
+## Stack
 
-### 1. JD Understanding (No LLM)
-- **Skills extraction**: 77-skill database with regex matching
-- **Experience parsing**: 5 regex patterns for years extraction
-- **Domain classification**: 9 categories (Backend, ML, Data, etc.)
-- **Leadership detection**: 16 keyword patterns
-- **Performance**: <1ms per JD
+| Layer          | Tool                                                         |
+|----------------|--------------------------------------------------------------|
+| JD parsing     | regex + a 77-skill dictionary (`preprocessing/jd_parser.py`)  |
+| Keyword search | BM25 (own implementation, k1 = 1.5, b = 0.75)                 |
+| Semantic search| `all-MiniLM-L6-v2` sentence embeddings + FAISS `IndexFlatIP`  |
+| Fusion         | Reciprocal Rank Fusion, `score += 1 / (60 + rank)`            |
+| Scoring        | skill ontology, merged career-history years, title progression, platform signals |
+| Weights        | 5 profiles picked from the JD: leadership, senior technical, specialist, mid-level, junior |
+| Re-ranking     | `cross-encoder/ms-marco-MiniLM-L-6-v2`, blended 70% features / 30% cross-encoder |
+| API            | FastAPI (warms data, indexes and models once at startup)     |
+| Frontend       | React 19 + Vite, no UI library                               |
 
-### 2. Hybrid Retrieval
-- **BM25**: Keyword-based search (SimpleBM25, k1=1.5, b=0.75)
-- **FAISS**: Semantic search (IndexFlatIP, 384-dim vectors)
-- **RRF Fusion**: `score = 1/(60+rank)` for Top 50 from each
-- **Performance**: 2-3ms query time, 4-5ms total pipeline
+## Data
 
-### 3. Feature Engineering
-- **Skill Score**: matched_skills / required_skills
-- **Experience Score**: candidate_years / required_years (capped at 1.0)
-- **Career Score**: Progression detection (Junior → Senior → Lead)
-- **Behavior Score**: GitHub activity, response rates, interview completion
-- **Semantic Score**: RRF score from hybrid retrieval
+| Source | What | Scope |
+|---|---|---|
+| India Runs Data & AI Challenge | anonymised candidate profiles: career history, skills with proficiency and endorsements, education, platform signals (response rate, interview completion, GitHub activity, offers, skill assessments) | 100,000 candidates, 487 MB JSONL |
 
-### 4. Ranking Formula
-```python
-final_score = (
-    0.40 * semantic_score +
-    0.25 * skill_score +
-    0.15 * experience_score +
-    0.10 * behavior_score +
-    0.10 * career_score
-)
-```
+## The five signals
 
-### 5. Reasoning Generation
-Factual explanations extracted from:
-- Skill matches (e.g., "Strong match on Python, FAISS, Machine Learning")
-- Experience level (e.g., "7 years relevant experience")
-- Career progression (e.g., "Demonstrated career progression through promotions")
-- Behavioral signals (e.g., "High recruiter engagement rate")
-- Platform activity (e.g., "Currently open to opportunities")
+| Signal | How it is computed |
+|---|---|
+| **Semantic** | the candidate's RRF score, normalised against the best in the top 100 |
+| **Skills** | each JD skill matched through an alias ontology (e.g. FAISS ↔ Milvus, Pinecone, Qdrant), weighted by proficiency and endorsements |
+| **Experience** | years from career history with overlapping jobs merged, divided by the JD's requirement (capped at 1) |
+| **Behaviour** | recruiter response rate, interview completion, GitHub activity, recruiter saves, offer acceptance, skill-assessment average |
+| **Career** | highest seniority level reached, plus bonuses for progression and tenure |
 
-## Installation
+The weights move with the JD: a leadership JD puts more on experience and career, a junior JD more on skills.
+The final score is `0.7 × weighted features + 0.3 × cross-encoder`, and the UI shows each part.
+
+## What the UI does
+
+- **Rank:** paste a JD (or load an example), choose how many to return, and watch the pipeline steps run.
+- **Results table:** rank, title, location, years, ontology-matched skills, and a stacked bar showing how many
+  points each signal contributed to the final score. Filter, sort by any signal, star, export to CSV.
+- **Candidate panel:** score table (signal × weight = points), "why this rank", skills with JD matches
+  highlighted, assessments, platform signals, experience and education.
+- **Compare:** up to three candidates side by side, with the best value in each row highlighted.
+
+| Results | Candidate panel |
+|---|---|
+| ![Ranked results table](docs/img/results.png) | ![Candidate detail panel](docs/img/candidate.png) |
+| Top 10 of 100,000 for a Senior ML Engineer JD. The bar shows each signal's share of the score. | Every score is broken down; skills that matched the JD are highlighted. |
+
+| Compare | Phone |
+|---|---|
+| ![Compare three candidates](docs/img/compare.png) | ![Mobile layout](docs/img/mobile.png) |
+
+## Results at a glance
+
+Measured on a Windows laptop (CPU only) with the built-in Senior ML Engineer JD.
+
+| Question | Result |
+|---|---|
+| Who comes out on top? | Senior ML Engineer, Senior NLP Engineer, Senior Applied Scientist, Senior Applied Scientist, Senior ML Engineer, Staff ML Engineer |
+| Does the API reproduce the submission? | Yes. `/api/rank` returns the same top IDs and scores as `outputs/submission.csv` (0.825, 0.8086, 0.7825, …) |
+| Before vs after wiring the full pipeline | The old 50-profile path without the cross-encoder put a Graphic Designer and an HR Manager first for the same JD |
+| Time per query (warm) | about 13 s: retrieval about 8–11 s, cross-encoder about 3–5 s |
+| Startup | about 80 s to load 100k profiles, both indexes and both models |
+| Cost per query | $0, no external calls |
+
+## Running it
+
+You need Python 3.12+ and Node 20+. Put the challenge data in
+`[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl`.
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
+cd frontend && npm install && cd ..
 
-# Build indexes (first time only)
-python retrieval/faiss_search_fast.py
-python retrieval/bm25_search.py
+# first run only: builds BM25 + FAISS indexes for all 100k profiles (a few minutes)
+# and writes outputs/submission.csv
+python generate_submission.py
+
+# API + UI together (Windows)
+start_dev.bat
+
+# or separately
+python -m uvicorn api.app:app --port 8000
+cd frontend && npm run dev
 ```
 
-## Usage
+| Service   | URL                         |
+|-----------|-----------------------------|
+| **UI**    | **http://localhost:5173**   |
+| API docs  | http://localhost:8000/docs  |
+| Health    | http://localhost:8000/api/health |
 
-### End-to-End Pipeline
+The UI says "Loading models…" until the API has finished warming up.
 
-```python
-from main import main, print_results, save_to_csv
+## Project layout
 
-jd = """
-Senior Machine Learning Engineer - Search & Ranking
+| Path | What |
+|---|---|
+| `generate_submission.py` | the full pipeline: indexes, hybrid search, scoring, cross-encoder, CSV/XLSX output |
+| `api/app.py` | FastAPI wrapper around `generate_submission.rank()` |
+| `frontend/` | React UI |
+| `preprocessing/` | JD parser, profile text builder |
+| `ranking/` | dynamic weights, earlier ranker and cross-encoder experiments |
+| `retrieval/` | earlier BM25 / FAISS / hybrid retrieval modules (used by `main.py` on the 50-profile sample) |
+| `features/`, `reasoning/` | feature scorers and reasoning used by `main.py` |
+| `evaluation/` | NDCG / precision metrics |
 
-Requirements:
-- 5+ years of experience in machine learning
-- Strong proficiency in Python, PyTorch, TensorFlow
-- Experience with FAISS, Elasticsearch, vector databases
-- Knowledge of ranking algorithms and recommendation systems
-"""
+## Project status
 
-# Run pipeline
-results = main(jd, top_k=10)
+**Working end to end** on the full 100k dataset, from JD to explained shortlist in the browser.
 
-# Display results
-print_results(results)
-
-# Save to CSV
-save_to_csv(results, 'output/ranked_candidates.csv')
-```
-
-### Quick Start
-
-```bash
-python main.py
-```
-
-### Output
-
-```
-Rank 1: CAND_0000031
-  Final Score: 0.847
-  Breakdown:
-    • Semantic: 0.028
-    • Skills: 0.800
-    • Experience: 1.000
-    • Behavior: 0.780
-    • Career: 0.850
-  Reasoning:
-    • Strong match on Python, FAISS, Machine Learning
-    • 6 years relevant experience
-    • Demonstrated career progression through promotions
-    • High recruiter engagement rate
-    • Currently open to opportunities
-```
-
-## Project Structure
-
-```
-redrob-ai/
-├── main.py                          # End-to-end pipeline
-├── preprocessing/
-│   └── jd_parser.py                 # JD parsing (no LLM)
-├── retrieval/
-│   ├── bm25_search.py               # BM25 keyword search
-│   ├── faiss_search_fast.py         # FAISS semantic search
-│   └── hybrid_retrieval.py          # RRF fusion (MAIN)
-├── features/
-│   ├── skill_score.py               # Skill matching
-│   ├── experience_score.py          # Experience scoring
-│   ├── career_score.py              # Career progression
-│   └── behavior_score.py            # Engagement signals
-├── ranking/
-│   └── score_candidates.py          # Weighted ranking
-├── reasoning/
-│   └── generate_reasoning.py        # Factual explanations
-├── data/
-│   ├── candidate_profiles.json      # 50 candidate profiles
-│   ├── faiss_index.bin              # FAISS index (77KB)
-│   ├── candidate_embeddings.npy     # 50x384 vectors
-│   ├── bm25_index.pkl               # BM25 index (202KB)
-│   └── bm25_candidates.pkl          # Candidate metadata
-└── output/
-    └── ranked_candidates.csv        # Results
-```
-
-## Performance Metrics
-
-| Component | Latency | Size |
-|-----------|---------|------|
-| JD Parser | <1ms | - |
-| BM25 Search | 1ms | 202KB |
-| FAISS Search | 1-2ms | 77KB |
-| Hybrid Retrieval | 2-3ms | - |
-| Feature Engineering | 1-2ms | - |
-| Full Pipeline | 4-5ms | - |
-
-**Accuracy**: 85% (vs 60-70% for single-method retrieval)
-
-**Cost**: $0 (no LLM calls)
-
-## Key Design Decisions
-
-### Why No LLM for JD Parsing?
-- **Deterministic**: Same input → same output
-- **Fast**: Sub-millisecond performance
-- **Cost**: Zero inference costs
-- **Reliable**: No hallucinations
-- **Trade-off**: Limited to predefined patterns (handles 80% of standard JDs)
-
-### Why Hybrid Retrieval?
-- **BM25**: Catches exact technical terms ("FAISS", "NDCG", "Python")
-- **FAISS**: Catches semantic meaning ("Vector Retrieval" ≈ "Embedding Search")
-- **Combined**: 85% accuracy vs 60-70% alone
-
-### Why RRF Fusion?
-- **Formula**: `1/(60+rank)` prevents rank-1 dominance
-- **Balanced**: Rank 1 gets 0.0164, Rank 50 gets 0.0091 (1.8x ratio vs 50x for 1/rank)
-- **Interpretable**: Source tracking (BOTH/FAISS/BM25) for confidence
-
-### Why Behavioral Signals?
-- **Hidden advantage**: Most systems ignore engagement data
-- **Predictive**: Response rates + completion rates → hiring success
-- **Normalized**: All signals scaled to [0, 1]
-
-## Development Status
-
-✅ **Completed (Steps 1-12)**
-- [x] FAISS semantic search (optimized with HashingVectorizer)
-- [x] BM25 keyword search (custom SimpleBM25)
-- [x] Hybrid retrieval with RRF fusion
-- [x] JD parser (no LLM, regex-based)
-- [x] Feature engineering (5 scoring modules)
-- [x] Ranking engine (weighted formula)
-- [x] Reasoning generator (factual explanations)
-- [x] End-to-end pipeline with CSV output
-
-## Testing
-
-```bash
-# Test individual components
-python preprocessing/jd_parser.py
-python retrieval/hybrid_retrieval.py
-python features/skill_score.py
-python ranking/score_candidates.py
-python reasoning/generate_reasoning.py
-
-# Test full pipeline
-python main.py
-```
-
-## Example Results
-
-For a "Senior ML Engineer - Search & Ranking" JD:
-
-| Rank | Candidate | Score | Top Reasons |
-|------|-----------|-------|-------------|
-| 1 | CAND_0000031 | 0.847 | Strong match on Python, FAISS, ML • 6 years experience • Career progression • High engagement |
-| 2 | CAND_0000043 | 0.782 | Relevant skills in PyTorch, TensorFlow • 8 years experience • Active GitHub contributor |
-| 3 | CAND_0000014 | 0.756 | Has FAISS experience • Senior-level engineering • Currently open to opportunities |
-
-## Future Enhancements
-
-- [ ] Add LLM-based reasoning (optional, for enhanced explanations)
-- [ ] Location-based filtering
-- [ ] Salary range matching
-- [ ] Multi-JD batch processing
-- [ ] Real-time candidate pool updates
-- [ ] A/B testing framework for ranking weights
-
-## License
-
-MIT
-
-## Contributing
-
-Contributions welcome! Focus areas:
-- Additional skill databases
-- Improved experience extraction patterns
-- Enhanced behavioral signal modeling
-- Alternative ranking formulas
-
----
-
-**Built with**: Python, FAISS, NumPy, scikit-learn  
-**Performance**: 4-5ms end-to-end, 85% accuracy, $0 cost  
-**Status**: Production-ready
+**Limits, honestly:** BM25 is pure Python and scans every document, so it is most of the 13 s per query
+(an inverted index would cut that to about a second without changing the scores). The API keeps the whole
+dataset in memory (a few GB). The JD parser is regex-based and sometimes picks up a skill that is only
+mentioned in passing. There is no labelled ground truth for the full dataset, so ranking quality here is
+judged by inspection, not by a measured NDCG.

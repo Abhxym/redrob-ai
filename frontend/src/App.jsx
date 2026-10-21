@@ -1,28 +1,17 @@
-import { useState, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
-import { CircleAlert, RotateCcw, Search, Download, GitCompare, Database, Zap, Gauge, Layers } from 'lucide-react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import Header from './components/Header.jsx';
 import Composer from './components/Composer.jsx';
-import PipelineTracker from './components/PipelineTracker.jsx';
+import Landing from './components/Landing.jsx';
+import { RunProgress, RunDetails } from './components/PipelineTracker.jsx';
 import CandidateRow from './components/CandidateRow.jsx';
 import CandidateDrawer from './components/CandidateDrawer.jsx';
+import CompareModal from './components/CompareModal.jsx';
 import { rankCandidates, getHealth, getCandidate } from './api.js';
-import { effectiveWeights, activeSignals, toCsv, pct } from './lib/profile.js';
-
-// Recharts is only needed for the comparison radar, so load it on demand.
-const CompareModal = lazy(() => import('./components/CompareModal.jsx'));
+import { effectiveWeights, activeSignals, toCsv } from './lib/profile.js';
 
 const MAX_COMPARE = 3;
 
-function initialTheme() {
-  try {
-    const saved = localStorage.getItem('redrob-theme');
-    if (saved) return saved;
-  } catch { /* storage unavailable */ }
-  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-}
-
 export default function App() {
-  const [theme, setTheme] = useState(initialTheme);
   const [health, setHealth] = useState(null);
   const [offline, setOffline] = useState(false);
 
@@ -41,11 +30,6 @@ export default function App() {
 
   const [drawer, setDrawer] = useState(null); // { result, profile, loading }
 
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    try { localStorage.setItem('redrob-theme', theme); } catch { /* ignore */ }
-  }, [theme]);
-
   // Poll health until the backend has finished loading data, indexes and models.
   const ready = health?.warm_state === 'ready';
   useEffect(() => {
@@ -61,7 +45,7 @@ export default function App() {
 
   const info = response?.pipeline_info;
   const weights = useMemo(() => effectiveWeights(info), [info]);
-  const sorts = useMemo(() => [{ key: 'final', label: 'Final score' }, ...activeSignals(weights)], [weights]);
+  const signals = useMemo(() => activeSignals(weights), [weights]);
 
   const runRank = useCallback(async (jdText, topK) => {
     setLoading(true);
@@ -129,158 +113,148 @@ export default function App() {
   };
 
   const hasResults = results.length > 0;
-  const avg = hasResults ? results.reduce((s, r) => s + r.final_score, 0) / results.length : 0;
 
   return (
     <div className="app">
-      <Header health={health} offline={offline} theme={theme} onToggleTheme={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))} />
+      <Header health={health} offline={offline} onHome={() => { setResponse(null); setError(null); }} />
 
-      <main className={`layout ${hasResults || loading ? 'layout-split' : 'layout-hero'}`}>
-        {!hasResults && !loading && (
-          <section className="hero">
-            <span className="eyebrow">Explainable candidate ranking</span>
-            <h1>Find the right engineers, <span className="grad">and see exactly why.</span></h1>
-            <p className="muted hero-sub">
-              Hybrid BM25 + FAISS retrieval fused with Reciprocal Rank Fusion, scored on five JD-aware signals,
-              then re-ranked by a cross-encoder. Deterministic, offline, CPU-only, zero LLM cost.
-            </p>
-          </section>
-        )}
+      {!hasResults && !loading ? (
+        <>
+          {error && <div className="alert alert-hero" role="alert">Ranking failed: {error}{offline && '. Is the API running on port 8000?'}</div>}
+          <Landing health={health} onSubmit={runRank} loading={loading} notReady={!ready} />
+        </>
+      ) : (
+      <div className="workspace">
+        <aside className="sidebar">
+          <div className="section">
+            <h3 className="label">Job description</h3>
+            <Composer onSubmit={runRank} loading={loading} notReady={!ready} compact initialText={lastQuery?.jdText} initialTopK={lastQuery?.topK} />
+          </div>
 
-        <div className="side">
-          <Composer onSubmit={runRank} loading={loading} compact={hasResults} notReady={!ready} />
-          <PipelineTracker loading={loading} done={hasResults && !loading} info={info} />
-          {hasResults && (
-            <section className="card weights">
-              <div className="weights-head">
-                <span className="eyebrow">Share of final score</span>
-                {info?.jd_type && <span className="tag">{info.jd_type.replace('_', ' ')} JD</span>}
-              </div>
-              {activeSignals(weights).map(s => (
-                <div key={s.key} className="weight-row" title={s.hint}>
-                  <span className="swatch" style={{ background: s.color }} />
-                  <span>{s.label}</span>
-                  <span className="weight-bar"><span style={{ width: `${weights[s.key] * 100 * 2.5}%`, background: s.color }} /></span>
-                  <span className="mono small">{Math.round(weights[s.key] * 100)}%</span>
-                </div>
-              ))}
-              {info?.jd_skills?.length > 0 && (
-                <div className="jd-skills">
-                  <span className="eyebrow">Skills detected in JD</span>
-                  <div className="tags">{info.jd_skills.map(s => <span key={s} className="tag">{s}</span>)}</div>
-                </div>
-              )}
-            </section>
-          )}
-        </div>
-
-        <div className="results" id="results">
-          {error && (
-            <div className="banner banner-error" role="alert">
-              <CircleAlert size={16} />
-              <span>Ranking failed: {error}{offline && ' — is the API running on port 8000?'}</span>
-              {lastQuery && (
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => runRank(lastQuery.jdText, lastQuery.topK)} disabled={loading}>
-                  <RotateCcw size={13} /> Retry
-                </button>
-              )}
-            </div>
-          )}
-
-          {loading && (
-            <ul className="crow-list" aria-busy="true">
-              {Array.from({ length: 6 }, (_, i) => <li key={i} className="crow skeleton" />)}
-            </ul>
-          )}
+          {loading && <div className="section"><RunProgress /></div>}
 
           {hasResults && !loading && (
             <>
-              <div className="stats">
-                <Stat icon={<Database size={15} />} label="Searched" value={(info?.corpus_size ?? 0).toLocaleString()} />
-                <Stat icon={<Gauge size={15} />} label="Top match" value={pct(results[0].final_score)} />
-                <Stat icon={<Layers size={15} />} label={`Avg of top ${results.length}`} value={pct(avg)} />
-                <Stat icon={<Zap size={15} />} label="Latency" value={info?.latency ?? '—'} />
+              <div className="section">
+                <h3 className="label">Last run</h3>
+                <RunDetails info={info} />
               </div>
-
-              <div className="toolbar">
-                <label className="search">
-                  <Search size={14} />
-                  <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Filter by skill, role, location…" aria-label="Filter results" />
-                </label>
-                <select value={sortKey} onChange={e => setSortKey(e.target.value)} aria-label="Sort by">
-                  {sorts.map(s => <option key={s.key} value={s.key}>Sort: {s.label}</option>)}
-                </select>
-                <button type="button" className={`pill ${openOnly ? 'pill-on' : ''}`} onClick={() => setOpenOnly(v => !v)} aria-pressed={openOnly}>Open to work</button>
-                <button type="button" className={`pill ${shortlistOnly ? 'pill-on' : ''}`} onClick={() => setShortlistOnly(v => !v)} aria-pressed={shortlistOnly}>★ Starred ({starred.size})</button>
-                <span className="toolbar-spacer" />
-                <button type="button" className="btn btn-ghost btn-sm" onClick={exportCsv} disabled={!visible.length}>
-                  <Download size={14} /> CSV
-                </button>
+              <div className="section">
+                <h3 className="label">Weights for this JD</h3>
+                <table className="kv-table">
+                  <tbody>
+                    {signals.map(s => (
+                      <tr key={s.key} title={s.hint}>
+                        <th><span className="swatch" style={{ background: s.color }} />{s.label}</th>
+                        <td className="mono">{Math.round(weights[s.key] * 100)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {info?.ce_blend && (
+                  <p className="hint">
+                    Final = {Math.round(info.ce_blend.feature * 100)}% feature score + {Math.round(info.ce_blend.cross_encoder * 100)}% cross-encoder.
+                  </p>
+                )}
               </div>
-
-              <div className="legend" aria-label="Signal colors">
-                {activeSignals(weights).map(s => (
-                  <span key={s.key}><span className="swatch" style={{ background: s.color }} />{s.label}</span>
-                ))}
-              </div>
-
-              {visible.length === 0 ? (
-                <div className="empty card">No candidates match these filters.</div>
-              ) : (
-                <ul className="crow-list">
-                  {visible.map(r => (
-                    <CandidateRow
-                      key={r.candidate_id}
-                      result={r}
-                      weights={weights}
-                      starred={starred.has(r.candidate_id)}
-                      comparing={compare.includes(r.candidate_id)}
-                      onStar={() => toggleStar(r.candidate_id)}
-                      onCompare={() => toggleCompare(r.candidate_id)}
-                      onOpen={() => openDrawer(r)}
-                    />
-                  ))}
-                </ul>
+              {info?.jd_skills?.length > 0 && (
+                <div className="section">
+                  <h3 className="label">Skills found in JD</h3>
+                  <p className="skills-text">{info.jd_skills.join(', ')}</p>
+                </div>
               )}
             </>
           )}
+        </aside>
 
-          {!hasResults && !loading && !error && (
-            <div className="howto">
-              {[
-                ['01', 'Retrieve', 'BM25 catches exact skill keywords; FAISS catches meaning. RRF fuses both ranked lists into a top 100.'],
-                ['02', 'Score', 'Semantic fit, ontology-matched skills, experience, behavior and career growth, with weights tuned to the JD type.'],
-                ['03', 'Re-rank & explain', 'A cross-encoder reads the JD and each profile together, blended 70/30 with the feature score. Every rank comes with reasons.'],
-              ].map(([n, t, d]) => (
-                <div key={n} className="card howto-card">
-                  <span className="mono howto-n">{n}</span>
-                  <h3>{t}</h3>
-                  <p className="muted small">{d}</p>
-                </div>
-              ))}
+        <main className="main">
+          {error && (
+            <div className="alert" role="alert">
+              <span>Ranking failed: {error}{offline && '. Is the API running on port 8000?'}</span>
+              {lastQuery && (
+                <button type="button" className="btn" onClick={() => runRank(lastQuery.jdText, lastQuery.topK)} disabled={loading}>Retry</button>
+              )}
             </div>
           )}
-        </div>
-      </main>
 
-      {compare.length > 0 && (
-        <div className="tray">
-          <GitCompare size={15} />
-          <span>{compare.length} selected</span>
-          <span className="mono muted small">{compare.join(' · ')}</span>
-          <button type="button" className="btn btn-primary btn-sm" disabled={compare.length < 2} onClick={() => setShowCompare(true)}>Compare</button>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCompare([])}>Clear</button>
-        </div>
+          {loading && !hasResults && <div className="empty"><p className="muted">Working…</p></div>}
+
+          {hasResults && (
+            <div className={loading ? 'is-stale' : ''}>
+              <div className="stat-row">
+                <StatCard label="Profiles searched" value={(info?.corpus_size ?? 0).toLocaleString()} tag="bm25 + faiss" />
+                <StatCard label="Top match" value={Math.round(results[0].final_score * 100)} tag="/ 100" />
+                <StatCard label="Ranked in" value={info?.latency} tag={info?.jd_type?.replace('_', ' ')} />
+              </div>
+              <div className="toolbar">
+                <span className="summary"><strong>{visible.length}</strong> of top {results.length}</span>
+                <span className="toolbar-spacer" />
+                <input className="input" value={query} onChange={e => setQuery(e.target.value)} placeholder="Filter" aria-label="Filter results" />
+                <select className="input" value={sortKey} onChange={e => setSortKey(e.target.value)} aria-label="Sort by">
+                  <option value="final">Sort by final score</option>
+                  {signals.map(s => <option key={s.key} value={s.key}>Sort by {s.label.toLowerCase()}</option>)}
+                </select>
+                <label className="check"><input type="checkbox" checked={openOnly} onChange={e => setOpenOnly(e.target.checked)} /> Open to work</label>
+                <label className="check"><input type="checkbox" checked={shortlistOnly} onChange={e => setShortlistOnly(e.target.checked)} /> Starred ({starred.size})</label>
+                <button type="button" className="btn" onClick={exportCsv} disabled={!visible.length}>Export CSV</button>
+              </div>
+
+              {compare.length > 0 && (
+                <div className="selection">
+                  <span>{compare.length} selected for comparison</span>
+                  <button type="button" className="btn btn-primary" disabled={compare.length < 2} onClick={() => setShowCompare(true)}>Compare</button>
+                  <button type="button" className="link" onClick={() => setCompare([])}>Clear</button>
+                </div>
+              )}
+
+              <div className="table-wrap">
+                <table className="results">
+                  <thead>
+                    <tr>
+                      <th className="cell-check" aria-label="Compare" />
+                      <th className="num">#</th>
+                      <th>Candidate</th>
+                      <th className="num">Yrs</th>
+                      <th>Matched skills</th>
+                      <th>Score breakdown</th>
+                      <th className="num">Score</th>
+                      <th aria-label="Star" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visible.map(r => (
+                      <CandidateRow
+                        key={r.candidate_id}
+                        result={r}
+                        weights={weights}
+                        starred={starred.has(r.candidate_id)}
+                        comparing={compare.includes(r.candidate_id)}
+                        selected={drawer?.result.candidate_id === r.candidate_id}
+                        onStar={() => toggleStar(r.candidate_id)}
+                        onCompare={() => toggleCompare(r.candidate_id)}
+                        onOpen={() => openDrawer(r)}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+                {visible.length === 0 && <p className="muted pad">No candidates match these filters.</p>}
+              </div>
+
+              <div className="legend">
+                {signals.map(s => <span key={s.key}><span className="swatch" style={{ background: s.color }} />{s.label}</span>)}
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
       )}
 
       {showCompare && compare.length > 0 && (
-        <Suspense fallback={null}>
-          <CompareModal
-            results={compare.map(id => results.find(r => r.candidate_id === id)).filter(Boolean)}
-            onRemove={id => setCompare(c => c.filter(x => x !== id))}
-            onClose={() => setShowCompare(false)}
-          />
-        </Suspense>
+        <CompareModal
+          results={compare.map(id => results.find(r => r.candidate_id === id)).filter(Boolean)}
+          onRemove={id => setCompare(c => c.filter(x => x !== id))}
+          onClose={() => setShowCompare(false)}
+        />
       )}
 
       {drawer && (
@@ -299,11 +273,12 @@ export default function App() {
   );
 }
 
-function Stat({ icon, label, value }) {
+function StatCard({ label, value, tag }) {
   return (
-    <div className="stat card">
-      <span className="stat-label muted small">{icon}{label}</span>
-      <span className="stat-value mono">{value}</span>
-    </div>
+    <article className="card card-flat stat-card">
+      <div className="card-top"><span className="diamond" aria-hidden="true" /><span className="rule" />{tag && <span className="tag">{tag}</span>}</div>
+      <div className="stat">{value}</div>
+      <p className="card-note">{label}</p>
+    </article>
   );
 }
